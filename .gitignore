@@ -1,0 +1,19 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+
+# Large raw/source datasets
+anonyme/
+constitution/
+doc/
+output/
+
+# Generated artifacts
+end2end/output/
+
+# Editor/OS
+.vscode/
+.DS_Store
