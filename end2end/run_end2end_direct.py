@@ -408,6 +408,12 @@ def record_to_event(
         ("capital", "capital"),
         ("address", "address"),
         ("activity", "corporate_purpose"),
+        ("manager", "manager"),
+        ("president_directeur_general", "president_directeur_general"),
+        ("president", "president"),
+        ("directeur_general", "directeur_general"),
+        ("administrators", "administrators"),
+        ("auditor", "auditor"),
     ):
         value = record.get(source)
         if value:
