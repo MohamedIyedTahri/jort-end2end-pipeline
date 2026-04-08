@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+from collections import Counter
 import json
 import os
 import re
@@ -29,6 +30,69 @@ GENERIC_COMPANY_ID_BLACKLIST = {
     "adresse",
     "objet",
 }
+
+STRICT_TAX_ID_NUMERIC_REGEX = re.compile(r"^\d{8}$")
+STRICT_TAX_ID_MF_REGEX = re.compile(r"^\d{7,8}[A-Z]/[A-Z]/[A-Z]/\d{3}$")
+STRICT_TAX_ID_MF_ALT_REGEX = re.compile(r"^\d{7,8}/[A-Z]/[A-Z]/[A-Z]/\d{3}$")
+
+DATA_DICT_PATH = Path(__file__).resolve().parent / "data_dict.json"
+ENABLE_SECTION_FILTER = os.getenv("JORT_ENABLE_SECTION_FILTER", "0").strip().lower() in {"1", "true", "yes"}
+TAX_ID_STOPWORDS = {
+    "fiscale": "ocr_header_fiscale",
+    "fiscal": "ocr_header_fiscale",
+    "societes": "ocr_header_societes",
+    "societe": "ocr_header_societes",
+    "poursuivant": "ocr_column_break",
+    "demande": "ocr_footer_noise",
+    "au": "ocr_stopword_au",
+}
+
+
+def _load_data_dictionary() -> dict:
+    try:
+        return json.loads(DATA_DICT_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+DATA_DICT = _load_data_dictionary()
+DICT_FIELDS = DATA_DICT.get("fields", {})
+DICT_OCR_NORMALIZATION = {
+    str(k): str(v) for k, v in (DATA_DICT.get("ocr_normalization", {}) or {}).items() if str(k).strip()
+}
+DICT_ALIAS_TO_CANONICAL = {
+    str(k): str(v) for k, v in (DATA_DICT.get("flat_alias_to_canonical", {}) or {}).items() if str(k).strip()
+}
+DICT_SECTIONS = DATA_DICT.get("sections", {}) or {}
+DICT_SECTION_ANCHORS: List[str] = [
+    str(alias).strip()
+    for aliases in DICT_SECTIONS.values()
+    for alias in (aliases or [])
+    if str(alias).strip()
+]
+
+TAX_LABEL_ALIASES: List[str] = [
+    str(alias).strip()
+    for alias in (DICT_FIELDS.get("matricule_fiscal", []) or [])
+    if str(alias).strip()
+]
+if not TAX_LABEL_ALIASES:
+    TAX_LABEL_ALIASES = ["Matricule fiscal", "Matricule fiscale", "MF", "M.F", "identifiant fiscal"]
+
+_tax_alias_pattern = "|".join(re.escape(alias) for alias in sorted(TAX_LABEL_ALIASES, key=len, reverse=True))
+TAX_LABEL_REGEX = re.compile(
+    rf"(?P<label>{_tax_alias_pattern})\s*[:=\-]?\s*(?P<value>[^\n\r,;]+)",
+    flags=re.IGNORECASE,
+)
+
+SECTION_ANCHOR_REGEX = (
+    re.compile(
+        "|".join(re.escape(anchor) for anchor in sorted(DICT_SECTION_ANCHORS, key=len, reverse=True)),
+        flags=re.IGNORECASE,
+    )
+    if DICT_SECTION_ANCHORS
+    else None
+)
 
 
 def find_pdfs(pdf_root: Path, year: Optional[str], limit: Optional[int]) -> List[Path]:
@@ -167,34 +231,118 @@ def _normalize_tax_id(value: str) -> Optional[str]:
     normalized = value.upper().strip(" ,.;:-")
     normalized = re.sub(r"\s+", "", normalized)
     normalized = re.sub(r"[^A-Z0-9/\-]", "", normalized)
+    normalized = normalized.replace("-", "/")
     return normalized or None
 
 
-def extract_tax_identifier(text: str) -> Optional[str]:
-    if not text:
+def apply_ocr_normalization(text: str) -> str:
+    if not text or not DICT_OCR_NORMALIZATION:
+        return text
+
+    normalized_text = text
+    for source, target in sorted(DICT_OCR_NORMALIZATION.items(), key=lambda item: len(item[0]), reverse=True):
+        pattern = re.compile(rf"(?<!\w){re.escape(source)}(?!\w)", flags=re.IGNORECASE)
+        normalized_text = pattern.sub(target, normalized_text)
+    return normalized_text
+
+
+def canonicalize_alias(label: Optional[str]) -> Optional[str]:
+    if not label:
         return None
 
-    patterns = [
-        r"(?:matricule\s+fiscal|matricule|m\s*\.?\s*f\.?|identifiant\s+fiscal)\s*[:=\-]?\s*([A-Z0-9][A-Z0-9\s./\-]{4,40})",
-        r"\b(\d{5,}[A-Z]?\s*/\s*[A-Z]\s*/\s*[A-Z]\s*/\s*\d{2,4})\b",
-    ]
+    folded = unicodedata.normalize("NFKD", label).encode("ascii", "ignore").decode("ascii").lower().strip()
+    for alias, canonical in DICT_ALIAS_TO_CANONICAL.items():
+        alias_folded = unicodedata.normalize("NFKD", alias).encode("ascii", "ignore").decode("ascii").lower().strip()
+        if folded == alias_folded:
+            return canonical
+    return None
 
-    for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if not match:
-            continue
 
+def section_filtered_text(text: str) -> str:
+    if not text or not ENABLE_SECTION_FILTER or SECTION_ANCHOR_REGEX is None:
+        return text
+
+    snippets: List[str] = []
+    window = 700
+    for match in SECTION_ANCHOR_REGEX.finditer(text):
+        start = max(0, match.start() - window)
+        end = min(len(text), match.end() + window)
+        snippets.append(text[start:end])
+
+    if not snippets:
+        return text
+    return "\n\n".join(snippets)
+
+
+def _is_valid_tax_id_format(candidate: str) -> bool:
+    if not candidate:
+        return False
+    return bool(
+        STRICT_TAX_ID_NUMERIC_REGEX.match(candidate)
+        or STRICT_TAX_ID_MF_REGEX.match(candidate)
+        or STRICT_TAX_ID_MF_ALT_REGEX.match(candidate)
+    )
+
+
+def extract_tax_identifier_with_metadata(text: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    if not text:
+        return None, None, None
+
+    scoped_text = section_filtered_text(text)
+
+    # First: prefer tax IDs found near explicit labels.
+    for match in TAX_LABEL_REGEX.finditer(scoped_text):
         candidate = re.split(
-            r"\b(?:rc|registre|quittance|suivant|acte|adresse|capital|objet|g[ée]rant|d[ée]p[ôo]t)\b",
-            match.group(1),
+            r"\b(?:rc|registre|quittance|suivant|suivante|partie|demande|produisant|acte|adresse|capital|objet|g[ée]rant|d[ée]p[ôo]t|fiscale?|soci[ée]t[ée]s?)\b",
+            match.group("value"),
             maxsplit=1,
             flags=re.IGNORECASE,
         )[0]
         tax_id = _normalize_tax_id(candidate)
-        if tax_id and len(re.sub(r"[^A-Z0-9]", "", tax_id)) >= 6:
-            return tax_id
+        if tax_id and _is_valid_tax_id_format(tax_id):
+            label = re.sub(r"\s+", " ", match.group("label")).strip(" ,.;:-")
+            return tax_id, label, canonicalize_alias(label)
 
-    return None
+    # Second: strict global fallback only for Tunisian MF-like patterns.
+    strict_fallbacks = [
+        r"\b(\d{7,8}\s*[A-Z]\s*/\s*[A-Z]\s*/\s*[A-Z]\s*/\s*\d{3})\b",
+        r"\b(\d{7,8}\s*/\s*[A-Z]\s*/\s*[A-Z]\s*/\s*[A-Z]\s*/\s*\d{3})\b",
+    ]
+    for pattern in strict_fallbacks:
+        match = re.search(pattern, scoped_text, re.IGNORECASE)
+        if not match:
+            continue
+        tax_id = _normalize_tax_id(match.group(1))
+        if tax_id and _is_valid_tax_id_format(tax_id):
+            return tax_id, None, None
+
+    return None, None, None
+
+
+def extract_tax_identifier(text: str) -> Optional[str]:
+    tax_id, _, _ = extract_tax_identifier_with_metadata(text)
+    return tax_id
+
+
+def validate_tax_id(raw_tax_id: Optional[str]) -> tuple[Optional[str], bool, Optional[str]]:
+    if raw_tax_id is None:
+        return None, False, "missing"
+
+    candidate = str(raw_tax_id).strip()
+    if not candidate:
+        return None, False, "missing"
+
+    normalized = _normalize_tax_id(candidate)
+    if normalized and _is_valid_tax_id_format(normalized):
+        return normalized, True, None
+
+    folded = unicodedata.normalize("NFKD", candidate).encode("ascii", "ignore").decode("ascii").lower()
+    for stopword, reason in TAX_ID_STOPWORDS.items():
+        if re.search(rf"\b{re.escape(stopword)}\b", folded):
+            return None, False, reason
+    if "partie" in folded:
+        return None, False, "ocr_column_break"
+    return None, False, "invalid_format"
 
 
 def enrich_event_data(event_type: str, event_subtype: Optional[str], raw_text: str) -> Dict[str, object]:
@@ -267,9 +415,17 @@ def record_to_event(
 
     data.update(enrich_event_data(event_type, event_subtype, raw_text))
 
-    tax_id = extract_tax_identifier(raw_text)
-    if tax_id:
-        data["tax_id"] = tax_id
+    tax_id_raw, tax_id_label_raw, tax_id_label_canonical = extract_tax_identifier_with_metadata(raw_text)
+    tax_id_clean, tax_id_valid, tax_id_reject_reason = validate_tax_id(tax_id_raw)
+    data["tax_id_raw"] = tax_id_raw
+    data["tax_id_clean"] = tax_id_clean
+    data["tax_id_valid"] = tax_id_valid
+    data["tax_id_reject_reason"] = tax_id_reject_reason
+    data["tax_id_label_raw"] = tax_id_label_raw
+    data["tax_id_label_canonical"] = tax_id_label_canonical
+    data["has_tax_id"] = tax_id_valid
+    if tax_id_clean:
+        data["tax_id"] = tax_id_clean
 
     return {
         "company_id": record.get("company_id") or resolve_company_id(record, raw_text),
@@ -395,7 +551,7 @@ def process_pdf(
         if not raw_notice:
             continue
 
-        cleaned = clean_text(raw_notice)
+        cleaned = apply_ocr_normalization(clean_text(raw_notice))
         event_type, event_subtype = classify_event(cleaned)
         if event_type == "constitution":
             notices_constitution += 1
@@ -414,7 +570,12 @@ def process_pdf(
         except Exception:
             record = dict(metadata)
 
-        record["tax_id"] = extract_tax_identifier(cleaned)
+        tax_id_raw, tax_id_label_raw, tax_id_label_canonical = extract_tax_identifier_with_metadata(cleaned)
+        tax_id_clean, tax_id_valid, _ = validate_tax_id(tax_id_raw)
+        record["tax_id_raw"] = tax_id_raw
+        record["tax_id"] = tax_id_clean if tax_id_valid else None
+        record["tax_id_label_raw"] = tax_id_label_raw
+        record["tax_id_label_canonical"] = tax_id_label_canonical
         record["company_id"] = resolve_company_id(record, cleaned)
         record["canonical_company_name"] = resolve_canonical_company_name(record)
         record["journal_reference"] = ref
@@ -466,6 +627,7 @@ def run_pipeline(
     total = len(pdfs)
     max_workers = max(1, workers)
     print(f"[INFO] Starting pipeline on {total} PDFs with workers={max_workers}, resume={resume}")
+    print("[INFO] Progress will be reported for every completed PDF.")
 
     def _consume_result(result: Dict[str, object]) -> None:
         if not result.get("ok"):
@@ -485,8 +647,7 @@ def run_pipeline(
             except Exception:
                 result = {"ok": False}
             _consume_result(result)
-            if idx % 10 == 0 or idx == total:
-                print(f"[PROGRESS] {idx}/{total} PDFs processed")
+            print(f"[PROGRESS] {idx}/{total} PDFs processed")
     else:
         with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
             futures = {
@@ -500,6 +661,9 @@ def run_pipeline(
                 ): pdf_path
                 for pdf_path in pdfs
             }
+
+            # Show immediate liveness to avoid appearing stuck while first PDFs are processing.
+            print(f"[INFO] Submitted {len(futures)} PDF tasks to worker pool.")
             for idx, future in enumerate(concurrent.futures.as_completed(futures), 1):
                 stats["pdf_scanned"] += 1
                 try:
@@ -507,7 +671,10 @@ def run_pipeline(
                 except Exception:
                     result = {"ok": False}
                 _consume_result(result)
-                if idx % 10 == 0 or idx == total:
+                pdf_path = futures.get(future)
+                if pdf_path is not None:
+                    print(f"[PROGRESS] {idx}/{total} PDFs processed (latest={pdf_path.name})")
+                else:
                     print(f"[PROGRESS] {idx}/{total} PDFs processed")
 
     out_json = output_root / "extracted_notices_end2end.json"
@@ -521,7 +688,32 @@ def run_pipeline(
     timelines_out_json = output_root / "company_timelines.json"
     timelines_out_json.write_text(json.dumps(timelines, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    tax_reject_reasons: Counter[str] = Counter()
+    tax_extracted = 0
+    tax_valid = 0
+    tax_invalid = 0
+    for event in events:
+        data = (event or {}).get("data") or {}
+        if data.get("tax_id_raw"):
+            tax_extracted += 1
+        if data.get("tax_id_valid"):
+            tax_valid += 1
+        elif data.get("tax_id_raw"):
+            tax_invalid += 1
+            reason = str(data.get("tax_id_reject_reason") or "unknown")
+            tax_reject_reasons[reason] += 1
+
     stats["records_written"] = len(records)
+    stats["tax_extracted"] = tax_extracted
+    stats["tax_valid"] = tax_valid
+    stats["tax_invalid"] = tax_invalid
+    stats["tax_reject_reasons_top"] = dict(tax_reject_reasons.most_common(10))
+
+    print(
+        "[TAX_QUALITY] "
+        f"extracted={tax_extracted} valid={tax_valid} invalid={tax_invalid} "
+        f"top_reasons={dict(tax_reject_reasons.most_common(5))}"
+    )
 
     summary_path = output_root / "summary_end2end.json"
     summary_path.write_text(json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8")

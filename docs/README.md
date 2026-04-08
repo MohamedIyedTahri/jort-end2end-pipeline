@@ -8,6 +8,32 @@ This documentation suite contains **11 comprehensive technical documents** + **1
 
 ---
 
+## State Update (April 2026)
+
+The project now includes a production-style end-to-end flow for direct PDF extraction, event structuring, and post-OCR quality control.
+
+Current validated run status:
+
+- Multi-year run completed on 2014-2025 corpus (`doc/`)
+- PDFs processed: 1568
+- Notices processed: 250008
+- Events generated: 249927
+- Constitution records extracted: 67932
+- Tax IDs extracted: 58907
+- Tax IDs valid: 58907
+
+Operational artifacts:
+
+- Pipeline outputs: `end2end/output_all_years_dict/`
+- Search/BI API: `end2end/search_api.py`
+- Post-OCR cleaner + metrics: `end2end/run_after_ocr.py`
+
+Note:
+
+- Main quality gap now is `company_id` quality for non-constitution events (OCR leak phrases and unknown IDs), handled by post-OCR cleanup and suspicious-flagging reports.
+
+---
+
 ## Documentation Files (Quick Reference)
 
 ### **Part I: Project Context & Overview** (Files 1-3)

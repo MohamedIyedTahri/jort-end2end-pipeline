@@ -3,8 +3,8 @@
 **Project:** Infyntra - De l'opacité documentaire à l'intelligence économique  
 **Phase:** JORT Constitution Pipeline Implementation  
 **Duration:** [Project Start] - Ongoing  
-**Status:** Phase 1 Complete, Phase 2 In Progress  
-**Last Updated:** March 31, 2026
+**Status:** Core Pipeline + Search/BI Delivered, Data Quality Hardening In Progress  
+**Last Updated:** April 9, 2026
 
 ---
 
@@ -23,8 +23,31 @@ Target: Constitution announcements from the Journal Officiel de la République T
 ### **Deliverables**
 1. Extraction pipeline (6 modules)
 2. Analysis tools (validation vs. reference data)
-3. Documentation (11-part technical guide)
-4. Output dataset (JSON with 12 fields per notice)
+3. Event layer + company timelines (multi-year)
+4. Search API (FastAPI + Elasticsearch)
+5. BI dashboards (Executive + Company 360)
+6. Documentation (11-part technical guide)
+7. Output datasets (raw + cleaned post-OCR JSON)
+
+---
+
+## Current Validated State (April 2026)
+
+Latest large-scale run (`end2end/run_end2end_direct.py`):
+
+- PDFs processed: 1568
+- Notices processed: 250008
+- Events generated: 249927
+- Constitution records: 67932
+- Errors: 0
+- Tax IDs extracted/valid: 58907 / 58907
+
+Post-OCR quality regulation (`end2end/run_after_ocr.py`) now produces:
+
+- suspicious `company_id` flagging (`__suspicious__`)
+- normalized `company_id` formatting
+- before/after quality report
+- top suspicious company ID leaderboard
 
 ---
 
@@ -76,17 +99,26 @@ Target: Constitution announcements from the Journal Officiel de la République T
 
 ---
 
-### **PHASE 4: Production & Deployment** 📋 PLANNED
+### **PHASE 4: Production & Deployment** 🔄 PARTIALLY COMPLETED
 
 | Week | Task | Effort | Status |
 |------|------|--------|--------|
-| 20-22 | API development (FastAPI/Flask wrapper) | 60h | 📋 Not Started |
-| 22-23 | Production deployment (containerization) | 30h | 📋 Not Started |
-| 23-24 | Real-time JORT feed integration | 40h | 📋 Not Started |
-| 24-25 | User documentation + training | 25h | 📋 Not Started |
+| 20-22 | API development (FastAPI/Elasticsearch wrapper) | 60h | ✅ Completed |
+| 22-23 | BI dashboards (Executive + Company 360) | 30h | ✅ Completed |
+| 23-24 | Production deployment (containerization + ops hardening) | 40h | 📋 Not Started |
+| 24-25 | Real-time JORT feed integration + user training | 25h | 📋 Not Started |
 
 **Estimated Duration:** 6 weeks  
-**Status:** 📋 Not started (planned Q3 2026)
+**Status:** 🔄 API/BI completed, deployment and feed integration pending
+
+---
+
+## Revised Immediate Priorities
+
+1. Reduce `__unknown_company__` rate on modification/liquidation events.
+2. Improve company identity resolution beyond tax ID-only matches.
+3. Add automated quality gates for suspicious `company_id` and event-level regressions.
+4. Consolidate KPI monitoring from extraction outputs into BI dashboards.
 
 ---
 

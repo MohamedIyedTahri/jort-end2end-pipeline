@@ -1,12 +1,50 @@
 # 11. État d'Avancement du Projet
 
+## April 2026 Status Update
+
+```
+Project: JORT Multi-Year Event Extraction + Search/BI Enablement
+Coverage: 2014-2025 corpus (doc/)
+Status: CORE DELIVERY COMPLETE, QUALITY HARDENING IN PROGRESS
+```
+
+### Latest Execution Snapshot (validated)
+
+- PDFs scanned/processed: 1568 / 1568
+- Notices total: 250008
+- Events generated: 249927
+- Constitution records written: 67932
+- Pipeline errors: 0
+- Tax IDs extracted: 58907
+- Tax IDs valid: 58907 (strict validation model)
+- Tax IDs invalid: 0
+
+### Newly Completed Components
+
+1. End-to-end direct pipeline at scale (`end2end/run_end2end_direct.py`)
+2. Event-layer normalization with timeline output (`company_timelines.json`)
+3. FastAPI + Elasticsearch search layer (`end2end/search_api.py`)
+4. BI dashboards provisioning scripts (`end2end/provision_exec_dashboard.py`, `end2end/provision_company360_dashboard.py`)
+5. Dictionary-assisted extraction hardening (`end2end/data_dict.json` integration)
+6. Post-OCR `company_id` quality regulation (`end2end/run_after_ocr.py`)
+
+### Current Quality Focus
+
+- Remaining issue is mainly `company_id` reliability for non-constitution events:
+  - high rate of unknown IDs for modification/liquidation notices
+  - OCR text leaks used as IDs (for example legal sentence fragments)
+- Mitigation already in place:
+  - suspicious ID detection and replacement by `__suspicious__`
+  - preservation of original raw value (`company_id_original`)
+  - quality report with top suspicious values and coverage metrics
+
 ## Summary: Project Status Overview
 
 ```
-Project: JORT Constitution Notice Extraction Pipeline
+Project: JORT Event Extraction and Structuring Pipeline
 Duration: [Start] - Present
-Focus: Tunisian legal notices 2004 (constitution documents)
-Status: PHASE 1 COMPLETE, PHASE 2 IN PROGRESS
+Focus: Tunisian legal notices 2014-2025 (constitution + modification + liquidation events)
+Status: CORE DELIVERY COMPLETE, QUALITY HARDENING IN PROGRESS
 ```
 
 ---
