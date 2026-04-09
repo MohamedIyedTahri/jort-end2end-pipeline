@@ -1,5 +1,22 @@
 # 9. Enrichissement NLP & Extraction Governance
 
+## April 2026 Scope Update
+
+This NLP module now serves two purposes:
+
+1. Governance extraction fallback (PERSON/role recovery)
+2. Activity taxonomy normalization + confidence scoring for downstream analytics
+
+New enrichment outputs now available in pipeline records/events:
+
+- `activity_category`
+- `activity_category_confidence`
+- `activity_category_keywords`
+- `field_confidence`
+- `parse_confidence`
+
+This makes NLP output directly consumable by search ranking and BI quality filtering.
+
 ## Introduction: Quand Regex Échoue
 
 Regex patterns sont rapides et précis pour  des cas **simples et structurés**:

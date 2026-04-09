@@ -18,6 +18,9 @@ Status: CORE DELIVERY COMPLETE, QUALITY HARDENING IN PROGRESS
 - Tax IDs extracted: 58907
 - Tax IDs valid: 58907 (strict validation model)
 - Tax IDs invalid: 0
+- Events with activity taxonomy category: 50314
+- Events with parse confidence score: 206045
+- Events with manager populated: 69374
 
 ### Newly Completed Components
 
@@ -27,6 +30,8 @@ Status: CORE DELIVERY COMPLETE, QUALITY HARDENING IN PROGRESS
 4. BI dashboards provisioning scripts (`end2end/provision_exec_dashboard.py`, `end2end/provision_company360_dashboard.py`)
 5. Dictionary-assisted extraction hardening (`end2end/data_dict.json` integration)
 6. Post-OCR `company_id` quality regulation (`end2end/run_after_ocr.py`)
+7. NLP activity taxonomy normalization + confidence scoring (`extractor/nlp_enrichment.py`, `extractor/parser.py`)
+8. Governance field propagation to event-layer output (`end2end/run_end2end_direct.py`)
 
 ### Current Quality Focus
 
@@ -37,6 +42,7 @@ Status: CORE DELIVERY COMPLETE, QUALITY HARDENING IN PROGRESS
   - suspicious ID detection and replacement by `__suspicious__`
   - preservation of original raw value (`company_id_original`)
   - quality report with top suspicious values and coverage metrics
+  - latest suspicious metrics: 1386 instances, 106 unique values
 
 ## Summary: Project Status Overview
 

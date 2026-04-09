@@ -31,6 +31,93 @@ CORE_LABEL_PATTERNS = {
     "duration": re.compile(r"dur[ée]e", re.IGNORECASE),
 }
 
+ACTIVITY_TAXONOMY = {
+    "commerce_distribution": [
+        "commerce",
+        "vente",
+        "distribution",
+        "grossiste",
+        "detail",
+        "import",
+        "export",
+        "negoce",
+    ],
+    "industry_manufacturing": [
+        "industrie",
+        "fabrication",
+        "production",
+        "usine",
+        "assemblage",
+        "conditionnement",
+        "transformation",
+    ],
+    "services_consulting": [
+        "service",
+        "conseil",
+        "etude",
+        "assistance",
+        "accompagnement",
+        "formation",
+    ],
+    "construction_real_estate": [
+        "batiment",
+        "construction",
+        "immobilier",
+        "promoteur",
+        "travaux",
+        "renovation",
+    ],
+    "transport_logistics": [
+        "transport",
+        "logistique",
+        "livraison",
+        "fret",
+        "transit",
+        "entreposage",
+    ],
+    "it_digital": [
+        "informatique",
+        "logiciel",
+        "digital",
+        "numerique",
+        "developpement",
+        "web",
+        "telecom",
+    ],
+    "agriculture_food": [
+        "agricole",
+        "agriculture",
+        "elevage",
+        "agroalimentaire",
+        "alimentaire",
+        "peche",
+    ],
+    "finance_insurance": [
+        "finance",
+        "financier",
+        "assurance",
+        "credit",
+        "leasing",
+        "investissement",
+    ],
+    "health_pharma": [
+        "sante",
+        "medical",
+        "pharmaceutique",
+        "pharmacie",
+        "clinique",
+        "laboratoire",
+    ],
+    "hospitality_tourism": [
+        "tourisme",
+        "hotel",
+        "restauration",
+        "restaurant",
+        "loisirs",
+        "voyage",
+    ],
+}
+
 STOP_LABEL_RE = re.compile(
     r"d[ée]nomination|raison\s+sociale|si[èe]ge|adresse|capital|objet|activit[ée]|dur[ée]e|g[ée]rant|pr[ée]sident|directeur\s+g[ée]n[ée]ral",
     re.IGNORECASE,
@@ -433,3 +520,62 @@ def extract_leadership_with_nlp(text: str) -> Dict[str, Optional[str]]:
                 continue
 
     return result
+
+
+def normalize_activity_taxonomy(corporate_purpose: Optional[str]) -> Dict[str, object]:
+    if not corporate_purpose:
+        return {
+            "activity_category": None,
+            "activity_category_confidence": 0.0,
+            "activity_category_keywords": [],
+        }
+
+    normalized_purpose = _norm_text(corporate_purpose)
+    if not normalized_purpose:
+        return {
+            "activity_category": None,
+            "activity_category_confidence": 0.0,
+            "activity_category_keywords": [],
+        }
+
+    nlp = _get_nlp()
+    doc = nlp(corporate_purpose)
+    lemma_tokens = {
+        _norm_text(token.lemma_ or token.text)
+        for token in doc
+        if not token.is_space and not token.is_punct
+    }
+
+    category_scores: Dict[str, int] = {}
+    category_matches: Dict[str, List[str]] = {}
+
+    for category, keywords in ACTIVITY_TAXONOMY.items():
+        matches: List[str] = []
+        for keyword in keywords:
+            keyword_norm = _norm_text(keyword)
+            if not keyword_norm:
+                continue
+            if keyword_norm in lemma_tokens or re.search(rf"\b{re.escape(keyword_norm)}\b", normalized_purpose):
+                matches.append(keyword_norm)
+
+        if matches:
+            unique_matches = sorted(set(matches))
+            category_scores[category] = len(unique_matches)
+            category_matches[category] = unique_matches
+
+    if not category_scores:
+        return {
+            "activity_category": "other",
+            "activity_category_confidence": 0.35,
+            "activity_category_keywords": [],
+        }
+
+    best_category = max(category_scores.items(), key=lambda item: item[1])[0]
+    match_count = category_scores[best_category]
+    confidence = min(0.95, 0.55 + (0.12 * match_count))
+
+    return {
+        "activity_category": best_category,
+        "activity_category_confidence": round(confidence, 2),
+        "activity_category_keywords": category_matches.get(best_category, []),
+    }

@@ -3,7 +3,11 @@ from __future__ import annotations
 import re
 from typing import Dict, Iterable, Optional, Set
 
-from extractor.nlp_enrichment import extract_core_fields_with_nlp, extract_leadership_with_nlp
+from extractor.nlp_enrichment import (
+    extract_core_fields_with_nlp,
+    extract_leadership_with_nlp,
+    normalize_activity_taxonomy,
+)
 from extractor.patterns import FIELD_PATTERNS, ROLE_PATTERNS
 
 
@@ -387,6 +391,49 @@ def _resolve_not_applicable_fields(
     return not_applicable
 
 
+SOURCE_CONFIDENCE = {
+    "regex": 0.93,
+    "nlp": 0.78,
+    "fallback": 0.65,
+    "derived": 0.7,
+    "missing": 0.0,
+}
+
+
+def _score_field_confidence(field: str, value: Optional[object], source: str) -> float:
+    if value is None:
+        return 0.0
+
+    text = re.sub(r"\s+", " ", str(value)).strip()
+    if not text:
+        return 0.0
+
+    score = SOURCE_CONFIDENCE.get(source, 0.6)
+
+    if field == "capital" and re.search(r"\d", text):
+        score += 0.03
+    elif field == "address" and len(text) >= 10:
+        score += 0.03
+    elif field == "company_name" and 2 <= len(text.split()) <= 8:
+        score += 0.03
+    elif field == "corporate_purpose" and len(text.split()) >= 4:
+        score += 0.03
+    elif field in {"manager", "president_directeur_general", "president", "directeur_general", "auditor"}:
+        if 2 <= len(text.split()) <= 8:
+            score += 0.02
+
+    return round(min(score, 0.99), 2)
+
+
+def _compute_parse_confidence(field_confidence: Dict[str, float], activity_category_confidence: float) -> float:
+    values = [value for value in field_confidence.values() if value > 0]
+    if activity_category_confidence > 0:
+        values.append(activity_category_confidence)
+    if not values:
+        return 0.0
+    return round(sum(values) / len(values), 2)
+
+
 def is_constitution_notice(text: str) -> bool:
     lower = text.lower()
 
@@ -427,82 +474,181 @@ def parse_notice(text: str, metadata: Dict[str, object]) -> Dict[str, object]:
     """Extract structured fields from a single cleaned notice text."""
     legal_form = str(metadata.get("legal_form") or "")
 
-    company_name = _normalize_company_name(
-        _extract_first(FIELD_PATTERNS["company_name"], text)
-    ) or _company_name_fallback(text)
+    company_name_regex = _normalize_company_name(_extract_first(FIELD_PATTERNS["company_name"], text))
+    company_name_fallback = _company_name_fallback(text)
+    company_name = company_name_regex or company_name_fallback
+    company_name_source = "regex" if company_name_regex else ("fallback" if company_name_fallback else "missing")
+
     address = _normalize_address(_extract_first(FIELD_PATTERNS["address"], text))
-    corporate_purpose = _normalize_text_value(
-        _extract_first(FIELD_PATTERNS["corporate_purpose"], text)
-    )
+    address_source = "regex" if address else "missing"
+
+    capital = _normalize_capital_value(_extract_first(FIELD_PATTERNS["capital"], text))
+    capital_source = "regex" if capital else "missing"
+
+    duration = _normalize_duration(_extract_first(FIELD_PATTERNS["duration"], text))
+    duration_source = "regex" if duration else "missing"
+
+    corporate_purpose = _normalize_text_value(_extract_first(FIELD_PATTERNS["corporate_purpose"], text))
+    corporate_purpose_source = "regex" if corporate_purpose else "missing"
+
     manager_label = _normalize_text_value(_extract_first(FIELD_PATTERNS["manager"], text))
     manager_sentence = _normalize_person_value(_manager_sentence_fallback(text))
-    capital = _normalize_capital_value(_extract_first(FIELD_PATTERNS["capital"], text))
-    duration = _normalize_duration(_extract_first(FIELD_PATTERNS["duration"], text))
 
+    nlp_core = None
     # NLP core-field fallback: indentation-aware line scan + lemmatized cues + NER.
     if any(value is None for value in [company_name, address, capital, corporate_purpose, duration]):
         nlp_core = extract_core_fields_with_nlp(text)
-        company_name = company_name or _normalize_company_name(nlp_core.get("company_name"))
-        address = address or _normalize_address(nlp_core.get("address"))
-        capital = capital or _normalize_capital_value(nlp_core.get("capital"))
+
+        if company_name is None:
+            company_name = _normalize_company_name(nlp_core.get("company_name"))
+            if company_name:
+                company_name_source = "nlp"
+
+        if address is None:
+            address = _normalize_address(nlp_core.get("address"))
+            if address:
+                address_source = "nlp"
+
+        if capital is None:
+            capital = _normalize_capital_value(nlp_core.get("capital"))
+            if capital:
+                capital_source = "nlp"
+
         if corporate_purpose is None:
             corporate_purpose = _normalize_corporate_purpose(nlp_core.get("corporate_purpose"))
-        duration = duration or _normalize_duration(nlp_core.get("duration"))
+            if corporate_purpose:
+                corporate_purpose_source = "nlp"
+
+        if duration is None:
+            duration = _normalize_duration(nlp_core.get("duration"))
+            if duration:
+                duration_source = "nlp"
 
     if corporate_purpose is not None and company_name is not None:
         if re.sub(r"\s+", " ", corporate_purpose).strip().lower() == re.sub(r"\s+", " ", company_name).strip().lower():
             corporate_purpose = None
+            corporate_purpose_source = "missing"
 
     if corporate_purpose is not None:
         corporate_purpose = _normalize_corporate_purpose(corporate_purpose)
+        if corporate_purpose is None:
+            corporate_purpose_source = "missing"
 
     if corporate_purpose is None:
-        nlp_core = extract_core_fields_with_nlp(text)
+        if nlp_core is None:
+            nlp_core = extract_core_fields_with_nlp(text)
         corporate_purpose = _normalize_corporate_purpose(nlp_core.get("corporate_purpose"))
+        if corporate_purpose:
+            corporate_purpose_source = "nlp"
 
     if company_name is not None:
         company_name = _normalize_company_name(company_name)
+        if company_name is None:
+            company_name_source = "missing"
 
     president_directeur_general = _extract_role("president_directeur_general", text)
+    pdg_source = "regex" if president_directeur_general else "missing"
     president = _extract_role("president", text)
+    president_source = "regex" if president else "missing"
     directeur_general = _extract_role("directeur_general", text)
+    dg_source = "regex" if directeur_general else "missing"
     administrators = _extract_role("administrators", text)
+    admins_source = "regex" if administrators else "missing"
     if administrators and re.search(r"\b(tout\s+en|pouvoirs|nomination)\b", administrators, re.IGNORECASE):
         administrators = None
+        admins_source = "missing"
     auditor = _extract_role("auditor", text)
+    auditor_source = "regex" if auditor else "missing"
+
+    manager: Optional[str] = None
+    manager_source = "missing"
 
     # Legal-form-aware manager mapping keeps compatibility with existing schema.
     if legal_form in {"sarl", "suarl"}:
-        manager = manager_label or manager_sentence
+        if manager_label:
+            manager = manager_label
+            manager_source = "regex"
+        elif manager_sentence:
+            manager = manager_sentence
+            manager_source = "fallback"
     elif legal_form == "anonyme":
-        manager = (
-            _sanitize_leadership_person(manager_label)
-            or manager_sentence
-            or president_directeur_general
-            or directeur_general
-            or president
-        )
+        if _sanitize_leadership_person(manager_label):
+            manager = _sanitize_leadership_person(manager_label)
+            manager_source = "regex"
+        elif manager_sentence:
+            manager = manager_sentence
+            manager_source = "fallback"
+        elif president_directeur_general:
+            manager = president_directeur_general
+            manager_source = pdg_source if pdg_source != "missing" else "derived"
+        elif directeur_general:
+            manager = directeur_general
+            manager_source = dg_source if dg_source != "missing" else "derived"
+        elif president:
+            manager = president
+            manager_source = president_source if president_source != "missing" else "derived"
 
         # NLP fallback (indentation-aware section scan + lemmatization + NER)
         # is applied only when regex extraction still leaves leadership missing.
         if manager is None or (president_directeur_general is None and president is None and directeur_general is None):
             nlp_roles = extract_leadership_with_nlp(text)
-            president_directeur_general = president_directeur_general or _sanitize_leadership_person(
-                nlp_roles.get("president_directeur_general")
-            )
-            president = president or _sanitize_leadership_person(nlp_roles.get("president"))
-            directeur_general = directeur_general or _sanitize_leadership_person(
-                nlp_roles.get("directeur_general")
-            )
-            manager = manager or _sanitize_leadership_person(nlp_roles.get("manager"))
+            if president_directeur_general is None:
+                president_directeur_general = _sanitize_leadership_person(nlp_roles.get("president_directeur_general"))
+                if president_directeur_general:
+                    pdg_source = "nlp"
+            if president is None:
+                president = _sanitize_leadership_person(nlp_roles.get("president"))
+                if president:
+                    president_source = "nlp"
+            if directeur_general is None:
+                directeur_general = _sanitize_leadership_person(nlp_roles.get("directeur_general"))
+                if directeur_general:
+                    dg_source = "nlp"
+            if manager is None:
+                manager = _sanitize_leadership_person(nlp_roles.get("manager"))
+                if manager:
+                    manager_source = "nlp"
     else:
-        manager = manager_label or manager_sentence
+        if manager_label:
+            manager = manager_label
+            manager_source = "regex"
+        elif manager_sentence:
+            manager = manager_sentence
+            manager_source = "fallback"
 
     president_directeur_general = _sanitize_leadership_person(president_directeur_general)
+    if president_directeur_general is None:
+        pdg_source = "missing"
     president = _sanitize_leadership_person(president)
+    if president is None:
+        president_source = "missing"
     directeur_general = _sanitize_leadership_person(directeur_general)
+    if directeur_general is None:
+        dg_source = "missing"
     if legal_form == "anonyme":
         manager = _sanitize_leadership_person(manager)
+        if manager is None:
+            manager_source = "missing"
+
+    activity_taxonomy = normalize_activity_taxonomy(corporate_purpose)
+    activity_category = activity_taxonomy.get("activity_category")
+    activity_category_confidence = float(activity_taxonomy.get("activity_category_confidence", 0.0))
+    activity_category_keywords = activity_taxonomy.get("activity_category_keywords") or []
+
+    field_confidence = {
+        "company_name": _score_field_confidence("company_name", company_name, company_name_source),
+        "address": _score_field_confidence("address", address, address_source),
+        "capital": _score_field_confidence("capital", capital, capital_source),
+        "corporate_purpose": _score_field_confidence("corporate_purpose", corporate_purpose, corporate_purpose_source),
+        "duration": _score_field_confidence("duration", duration, duration_source),
+        "manager": _score_field_confidence("manager", manager, manager_source),
+        "president_directeur_general": _score_field_confidence("president_directeur_general", president_directeur_general, pdg_source),
+        "president": _score_field_confidence("president", president, president_source),
+        "directeur_general": _score_field_confidence("directeur_general", directeur_general, dg_source),
+        "administrators": _score_field_confidence("administrators", administrators, admins_source),
+        "auditor": _score_field_confidence("auditor", auditor, auditor_source),
+    }
+    parse_confidence = _compute_parse_confidence(field_confidence, activity_category_confidence)
 
     not_applicable_fields = sorted(
         _resolve_not_applicable_fields(legal_form, text, manager, capital, duration)
@@ -515,6 +661,9 @@ def parse_notice(text: str, metadata: Dict[str, object]) -> Dict[str, object]:
         "capital": capital,
         "address": address,
         "corporate_purpose": corporate_purpose,
+        "activity_category": activity_category,
+        "activity_category_confidence": round(activity_category_confidence, 2),
+        "activity_category_keywords": activity_category_keywords,
         "duration": duration,
         "manager": manager,
         "president_directeur_general": president_directeur_general,
@@ -522,6 +671,8 @@ def parse_notice(text: str, metadata: Dict[str, object]) -> Dict[str, object]:
         "directeur_general": directeur_general,
         "administrators": administrators,
         "auditor": auditor,
+        "field_confidence": field_confidence,
+        "parse_confidence": parse_confidence,
         "not_applicable_fields": not_applicable_fields,
         "year": metadata.get("year"),
         "issue_number": metadata.get("issue_number"),

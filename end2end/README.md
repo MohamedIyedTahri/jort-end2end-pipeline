@@ -13,6 +13,19 @@ This folder contains a standalone end-to-end pipeline:
 - Modification notices may receive a lightweight `event_subtype` (for example: `capital_increase`, `capital_decrease`, `transfer_head_office`, `management_change`).
 - If parsing yields no structured fields, an event is still emitted with an empty `data` object to preserve timeline continuity.
 
+### NLP Enrichment (Current)
+
+The parser now enriches events with:
+
+- Governance propagation in `data`: `manager`, `president`, `directeur_general`, `president_directeur_general`, `administrators`, `auditor`
+- Activity taxonomy normalization:
+	- `activity_category`
+	- `activity_category_confidence`
+	- `activity_category_keywords`
+- Confidence scoring:
+	- per-field `field_confidence`
+	- global `parse_confidence`
+
 ## Run
 
 ```bash
@@ -49,6 +62,16 @@ For the full multi-year run, use:
 - `end2end/output_all_years_dict/company_timelines.json`
 - `end2end/output_all_years_dict/summary_end2end.json`
 
+Latest validated all-years snapshot:
+
+- PDFs processed: 1568
+- Notices processed: 250008
+- Events generated: 249927
+- Constitution records: 67932
+- Events with `activity_category`: 50314
+- Events with `parse_confidence`: 206045
+- Events with `manager`: 69374
+
 ## Post-OCR Company ID Cleanup
 
 Script: `end2end/run_after_ocr.py`
@@ -73,6 +96,11 @@ Outputs:
 
 - `end2end/output_all_years_dict/extracted_events_end2end_cleaned.json`
 - `end2end/output_all_years_dict/post_ocr_quality_report.json`
+
+Latest post-OCR quality metrics:
+
+- suspicious company_id instances: 1386
+- suspicious unique values: 106
 
 ## Search API (FastAPI + Elasticsearch)
 

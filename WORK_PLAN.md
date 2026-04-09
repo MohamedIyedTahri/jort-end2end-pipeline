@@ -41,6 +41,9 @@ Latest large-scale run (`end2end/run_end2end_direct.py`):
 - Constitution records: 67932
 - Errors: 0
 - Tax IDs extracted/valid: 58907 / 58907
+- Events with activity taxonomy category: 50314
+- Events with parse confidence score: 206045
+- Events with manager populated: 69374
 
 Post-OCR quality regulation (`end2end/run_after_ocr.py`) now produces:
 
@@ -48,6 +51,7 @@ Post-OCR quality regulation (`end2end/run_after_ocr.py`) now produces:
 - normalized `company_id` formatting
 - before/after quality report
 - top suspicious company ID leaderboard
+- latest suspicious metrics: 1386 instances, 106 unique values
 
 ---
 
@@ -117,8 +121,9 @@ Post-OCR quality regulation (`end2end/run_after_ocr.py`) now produces:
 
 1. Reduce `__unknown_company__` rate on modification/liquidation events.
 2. Improve company identity resolution beyond tax ID-only matches.
-3. Add automated quality gates for suspicious `company_id` and event-level regressions.
-4. Consolidate KPI monitoring from extraction outputs into BI dashboards.
+3. Calibrate taxonomy category confidence thresholds and validate category drift.
+4. Add automated quality gates for suspicious `company_id` and event-level regressions.
+5. Consolidate KPI monitoring from extraction outputs into BI dashboards.
 
 ---
 

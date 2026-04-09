@@ -1,5 +1,25 @@
 # 7. Pipeline d'Extraction: Data Flow Complet
 
+## April 2026 Delta (Current Runtime Outputs)
+
+The operational pipeline now emits event-level enrichment beyond raw extraction:
+
+- Governance fields in event data (`manager`, `president`, `directeur_general`, etc.)
+- Activity taxonomy classification:
+  - `activity_category`
+  - `activity_category_confidence`
+  - `activity_category_keywords`
+- Confidence artifacts:
+  - per-field `field_confidence`
+  - aggregate `parse_confidence`
+
+All-years validated runtime (2014-2025):
+
+- 249927 events generated
+- 50314 events with activity taxonomy
+- 206045 events with parse confidence
+- 69374 events with manager populated
+
 ## Architecture End-to-End
 
 ```

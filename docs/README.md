@@ -21,16 +21,21 @@ Current validated run status:
 - Constitution records extracted: 67932
 - Tax IDs extracted: 58907
 - Tax IDs valid: 58907
+- Events with activity taxonomy category: 50314
+- Events with parse confidence score: 206045
+- Events with manager populated: 69374
 
 Operational artifacts:
 
 - Pipeline outputs: `end2end/output_all_years_dict/`
 - Search/BI API: `end2end/search_api.py`
 - Post-OCR cleaner + metrics: `end2end/run_after_ocr.py`
+- NLP taxonomy and confidence: `extractor/nlp_enrichment.py`, `extractor/parser.py`
 
 Note:
 
 - Main quality gap now is `company_id` quality for non-constitution events (OCR leak phrases and unknown IDs), handled by post-OCR cleanup and suspicious-flagging reports.
+- Governance and activity enrichment are now propagated to event-level outputs and can be used directly for BI filtering/scoring.
 
 ---
 
