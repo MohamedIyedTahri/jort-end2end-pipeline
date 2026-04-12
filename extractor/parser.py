@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Dict, Iterable, Optional, Set
+from typing import Dict, Iterable, List, Optional, Set
 
 from extractor.nlp_enrichment import (
     extract_core_fields_with_nlp,
@@ -91,6 +91,49 @@ MANAGER_FALLBACK_PATTERNS = [
 ]
 
 
+COMPACT_NARRATIVE_START_RE = re.compile(
+    r"^(?:\d+\s*[-\.)]\s*)?(?:suivant|par\s+d[ée]cision|par\s+acte|aux\s+termes|il\s+r[ée]sulte|"
+    r"en\s+vertu|d[ée]p[ôo]t\s+l[ée]gal|du\s+proc[èe]s[\-\s]?verbal)",
+    re.IGNORECASE,
+)
+COMPACT_LEGAL_FORM_RE = re.compile(
+    r"\b(?:S\.?A\.?R\.?L\.?|SARL|S\.?A\.?\b|SA\b|SUARL|S\.?U\.?A\.?R\.?L\.?|"
+    r"Soci[ée]t[ée]\s+anonyme|Soci[ée]t[ée]\s+[àa]\s+responsabilit[ée]\s+limit[ée]e|"
+    r"Soci[ée]t[ée]\s+unipersonnelle)\b",
+    re.IGNORECASE,
+)
+COMPACT_CAPITAL_LINE_RE = re.compile(
+    r"(?:au\s+)?capital\s+(?:social\s+)?(?:de\s+|:\s*)?([\d][\d.\s,]*)\s*(dinars?|d\.?t?\.?|d\b)",
+    re.IGNORECASE,
+)
+COMPACT_RC_RE = re.compile(
+    r"(?:R\.?C\.?[SB]?\s*(?::\s*|n[°o]\s*|\b)|Registre\s+de\s+commerce\s*:?\s*)(?:n[°o]\s*)?([A-Z]?\d[\w/]*\d)",
+    re.IGNORECASE,
+)
+COMPACT_MF_RE = re.compile(
+    r"(?:M\.?F\.?\s*:?\s*|Matricule\s+fiscal[e]?\s*:?\s*)([A-Z0-9][\w/\-]+)",
+    re.IGNORECASE,
+)
+COMPACT_SIEGE_RE = re.compile(r"^Si[èeé]ge\s*(?:social[e]?)?\s*:?\s*(.*)", re.IGNORECASE)
+COMPACT_LABEL_RE = re.compile(
+    r"^(?:d[ée]nomination|raison\s+sociale|si[èeé]ge|capital|objet|dur[ée]e|r\.?c|m\.?f|matricule|"
+    r"registre\s+de\s+commerce|g[ée]rant|administrateur|commissaire)",
+    re.IGNORECASE,
+)
+STREET_HINT_RE = re.compile(
+    r"\b(rue|avenue|av\.?|boulevard|bd\.?|route|zone|lotissement|immeuble|r[ée]sidence|"
+    r"quartier|impasse|all[ée]e|villa|cit[ée])\b",
+    re.IGNORECASE,
+)
+NARRATIVE_KEYWORDS = {
+    "capital_increase": ["augmentation de capital", "capital augmente", "capital porté"],
+    "capital_decrease": ["reduction de capital", "réduction de capital", "diminution du capital"],
+    "transfer_head_office": ["transfert du siege", "transfert de siege", "nouveau siege"],
+    "management_change": ["nomination", "nouveau gerant", "changement de gerant", "révocation"],
+    "cession_parts": ["cession de parts", "cession des parts"],
+}
+
+
 def _extract_first(patterns: Iterable[re.Pattern[str]], text: str) -> Optional[str]:
     for pattern in patterns:
         match = pattern.search(text)
@@ -107,6 +150,98 @@ def _normalize_text_value(value: Optional[str]) -> Optional[str]:
     if not normalized:
         return None
     return normalized
+
+
+def _looks_like_address_fragment(value: str) -> bool:
+    if not value:
+        return False
+    text = re.sub(r"\s+", " ", value).strip()
+    if len(text) < 4 or len(text) > 160:
+        return False
+    if re.match(r"^\d", text):
+        return True
+    if STREET_HINT_RE.search(text):
+        return True
+    if re.search(r"\b\d{4}\b", text):
+        return True
+    return False
+
+
+def _extract_compact_header_fields(text: str) -> Dict[str, Optional[str]]:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    lines = lines[:40]
+
+    compact: Dict[str, Optional[str]] = {
+        "company_name": None,
+        "address": None,
+        "capital": None,
+        "legal_form_text": None,
+        "registre_commerce": None,
+        "matricule_fiscal": None,
+    }
+
+    for idx, line in enumerate(lines):
+        if COMPACT_NARRATIVE_START_RE.match(line):
+            break
+
+        if compact["legal_form_text"] is None and COMPACT_LEGAL_FORM_RE.search(line):
+            compact["legal_form_text"] = _normalize_text_value(line)
+
+        if compact["capital"] is None:
+            cap_match = COMPACT_CAPITAL_LINE_RE.search(line)
+            if cap_match:
+                compact["capital"] = _normalize_capital_value(cap_match.group(0))
+
+        if compact["registre_commerce"] is None:
+            rc_match = COMPACT_RC_RE.search(line)
+            if rc_match:
+                compact["registre_commerce"] = _normalize_text_value(rc_match.group(1))
+
+        if compact["matricule_fiscal"] is None:
+            mf_match = COMPACT_MF_RE.search(line)
+            if mf_match:
+                compact["matricule_fiscal"] = _normalize_text_value(mf_match.group(1))
+
+        if compact["address"] is None:
+            siege = COMPACT_SIEGE_RE.match(line)
+            if siege:
+                addr = _normalize_address(siege.group(1))
+                if addr is None and idx + 1 < len(lines) and _looks_like_address_fragment(lines[idx + 1]):
+                    addr = _normalize_address(lines[idx + 1])
+                compact["address"] = addr
+
+        if compact["company_name"] is None:
+            upper_ratio = sum(1 for c in line if c.isupper()) / max(1, sum(1 for c in line if c.isalpha()))
+            if upper_ratio > 0.6 and len(line) <= 120 and not COMPACT_LABEL_RE.match(line):
+                name = _normalize_company_name(line)
+                if name:
+                    compact["company_name"] = name
+
+    return compact
+
+
+def _extract_narrative_decomposition(text: str) -> Dict[str, object]:
+    normalized = re.sub(r"\s+", " ", text)
+    decisions: List[str] = []
+    for key, keywords in NARRATIVE_KEYWORDS.items():
+        if any(keyword in normalized.lower() for keyword in keywords):
+            decisions.append(key)
+
+    dates = re.findall(r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b", normalized)
+    unique_dates: List[str] = []
+    seen_dates = set()
+    for date in dates:
+        if date not in seen_dates:
+            seen_dates.add(date)
+            unique_dates.append(date)
+
+    return {
+        "narrative_decisions": decisions,
+        "narrative_dates": unique_dates[:5],
+        "narrative_has_procedural_markers": bool(
+            re.search(r"\b(proc[èe]s[-\s]?verbal|enregistr[ée]|greffe|tribunal|d[ée]p[ôo]t)\b", normalized, re.IGNORECASE)
+        ),
+    }
 
 
 def _normalize_company_name(value: Optional[str]) -> Optional[str]:
@@ -393,6 +528,7 @@ def _resolve_not_applicable_fields(
 
 SOURCE_CONFIDENCE = {
     "regex": 0.93,
+    "compact": 0.82,
     "nlp": 0.78,
     "fallback": 0.65,
     "derived": 0.7,
@@ -473,23 +609,37 @@ def is_constitution_notice(text: str) -> bool:
 def parse_notice(text: str, metadata: Dict[str, object]) -> Dict[str, object]:
     """Extract structured fields from a single cleaned notice text."""
     legal_form = str(metadata.get("legal_form") or "")
+    compact_header = _extract_compact_header_fields(text)
+    narrative_decomposition = _extract_narrative_decomposition(text)
 
     company_name_regex = _normalize_company_name(_extract_first(FIELD_PATTERNS["company_name"], text))
     company_name_fallback = _company_name_fallback(text)
-    company_name = company_name_regex or company_name_fallback
-    company_name_source = "regex" if company_name_regex else ("fallback" if company_name_fallback else "missing")
+    company_name_compact = _normalize_company_name(compact_header.get("company_name"))
+    company_name = company_name_regex or company_name_compact or company_name_fallback
+    company_name_source = (
+        "regex"
+        if company_name_regex
+        else ("compact" if company_name_compact else ("fallback" if company_name_fallback else "missing"))
+    )
 
     address = _normalize_address(_extract_first(FIELD_PATTERNS["address"], text))
-    address_source = "regex" if address else "missing"
+    if address is None:
+        address = _normalize_address(compact_header.get("address"))
+    address_source = "regex" if _extract_first(FIELD_PATTERNS["address"], text) else ("compact" if address else "missing")
 
     capital = _normalize_capital_value(_extract_first(FIELD_PATTERNS["capital"], text))
-    capital_source = "regex" if capital else "missing"
+    if capital is None:
+        capital = _normalize_capital_value(compact_header.get("capital"))
+    capital_source = "regex" if _extract_first(FIELD_PATTERNS["capital"], text) else ("compact" if capital else "missing")
 
     duration = _normalize_duration(_extract_first(FIELD_PATTERNS["duration"], text))
     duration_source = "regex" if duration else "missing"
 
     corporate_purpose = _normalize_text_value(_extract_first(FIELD_PATTERNS["corporate_purpose"], text))
     corporate_purpose_source = "regex" if corporate_purpose else "missing"
+
+    registre_commerce = _normalize_text_value(compact_header.get("registre_commerce"))
+    matricule_fiscal = _normalize_text_value(compact_header.get("matricule_fiscal"))
 
     manager_label = _normalize_text_value(_extract_first(FIELD_PATTERNS["manager"], text))
     manager_sentence = _normalize_person_value(_manager_sentence_fallback(text))
@@ -647,6 +797,8 @@ def parse_notice(text: str, metadata: Dict[str, object]) -> Dict[str, object]:
         "directeur_general": _score_field_confidence("directeur_general", directeur_general, dg_source),
         "administrators": _score_field_confidence("administrators", administrators, admins_source),
         "auditor": _score_field_confidence("auditor", auditor, auditor_source),
+        "registre_commerce": _score_field_confidence("registre_commerce", registre_commerce, "compact" if registre_commerce else "missing"),
+        "matricule_fiscal": _score_field_confidence("matricule_fiscal", matricule_fiscal, "compact" if matricule_fiscal else "missing"),
     }
     parse_confidence = _compute_parse_confidence(field_confidence, activity_category_confidence)
 
@@ -661,9 +813,14 @@ def parse_notice(text: str, metadata: Dict[str, object]) -> Dict[str, object]:
         "capital": capital,
         "address": address,
         "corporate_purpose": corporate_purpose,
+        "registre_commerce": registre_commerce,
+        "matricule_fiscal": matricule_fiscal,
         "activity_category": activity_category,
         "activity_category_confidence": round(activity_category_confidence, 2),
         "activity_category_keywords": activity_category_keywords,
+        "narrative_decisions": narrative_decomposition.get("narrative_decisions"),
+        "narrative_dates": narrative_decomposition.get("narrative_dates"),
+        "narrative_has_procedural_markers": narrative_decomposition.get("narrative_has_procedural_markers"),
         "duration": duration,
         "manager": manager,
         "president_directeur_general": president_directeur_general,

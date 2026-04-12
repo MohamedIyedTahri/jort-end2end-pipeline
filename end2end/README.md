@@ -233,6 +233,14 @@ Dashboard ID:
 
 - `jort-company-360-dashboard`
 
+Run both dashboards at once:
+
+```bash
+cd /home/iyedpc1/jort
+source .venv/bin/activate
+python end2end/provision_dashboard.py
+```
+
 Includes:
 
 - Controls panel (dashboard-level filtering):
@@ -247,3 +255,24 @@ Includes:
 	- Valid vs invalid trend by year
 	- Reject reason distribution
 	- Top offending raw tax ID patterns
+
+## Kibana with Docker
+
+If you want a local dev stack, start Elasticsearch and Kibana with the provided
+compose file:
+
+```bash
+docker compose -f docker-compose.elastic.yml up -d
+```
+
+Then provision the dashboards:
+
+```bash
+cd /home/iyedpc1/jort
+source .venv/bin/activate
+python end2end/provision_dashboard.py
+```
+
+The dashboard scripts also honor `KIBANA_URL`, and the API honors
+`ELASTICSEARCH_URL`, so you can point them at non-default hosts if your Docker
+containers are not bound to localhost.

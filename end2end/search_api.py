@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
@@ -11,7 +12,7 @@ from elasticsearch.exceptions import NotFoundError as ESNotFoundError
 from elasticsearch.exceptions import TransportError
 from fastapi import FastAPI, HTTPException, Query
 
-ES_URL = "http://localhost:9200"
+ES_URL = os.environ.get("ELASTICSEARCH_URL", "http://localhost:9200")
 INDEX_NAME = "jort_events"
 STRUCTURED_INDEX_NAME = "jort_events_structured"
 PROFILE_INDEX_NAME = "jort_company_profile"

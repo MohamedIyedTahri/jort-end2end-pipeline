@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any, Dict, List
 
-KIBANA_URL = "http://localhost:5601"
+KIBANA_URL = os.environ.get("KIBANA_URL", "http://localhost:5601")
 STRUCTURED_PATTERN_ID = "jort-structured-pattern"
 
 
